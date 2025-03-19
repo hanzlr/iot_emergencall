@@ -1,20 +1,24 @@
 #include <WiFi.h>
-#include <ESPAsyncWebServer.h>
-#include "index.h"  // File index.h untuk HTML halaman web
 #include <HTTPClient.h>
 
 #define BUZZER 4  // Pin Buzzer
 #define LED1 13   // LED Merah
 #define LED2 12   // LED Hijau
 
-// Replace with your network credentials
+// Gantilah dengan kredensial WiFi Anda
 const char* ssid = "BarraIbnuHasan";        // Nama WiFi Anda
 const char* password = "barraibnuhasan12";  // Password WiFi Anda
 
-AsyncWebServer server(80);  // Inisialisasi web server pada port 80
+// Endpoint server
+const char* statusServer = "http://192.168.0.133/UAS_PBM_5/get_status.php";
 
-bool buttonState = false;          // Status tombol di web server
-bool previousButtonState = false;  // Status tombol sebelumnya
+// Variabel untuk status
+String status;
+String statusled;
+
+// Variabel untuk menyimpan status terakhir
+String lastStatus = "";
+String lastStatusLed = "";
 
 void setup() {
   // Inisialisasi Serial Monitor
@@ -32,75 +36,67 @@ void setup() {
     Serial.println("Connecting to WiFi...");
   }
   Serial.println("Connected to WiFi");
-  Serial.println(WiFi.localIP());  // Menampilkan IP address ESP32
-
-  // Menyiapkan root URL
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-    String html = String(index_html);  // Menggunakan konten dari index.h
-    html.replace("{{buttonState}}", buttonState ? "AKTIF" : "NONAKTIF");
-    html.replace("{{buttonStateBadge}}", buttonState ? "success" : "danger");
-    request->send(200, "text/html", html);
-  });
-
-  // Menangani tombol ditekan
-  server.on("/toggle", HTTP_POST, [](AsyncWebServerRequest* request) {
-    buttonState = !buttonState;  // Toggle status tombol
-    request->redirect("/");      // Redirect kembali ke halaman utama
-  });
-
-  // Memulai server
-  server.begin();
 }
 
 void loop() {
-  // Kontrol LED dan Buzzer berdasarkan status tombol
-  String status;
-  String statusled;
-  
-  // Periksa jika tombol berubah
-  if (buttonState != previousButtonState) {
-    // Perbarui status berdasarkan nilai buttonState yang baru
-    if (buttonState) {
-      digitalWrite(LED1, HIGH);  // LED Merah menyala
-      digitalWrite(LED2, LOW);   // LED Hijau mati
-      tone(BUZZER, 1000);        // Buzzer berbunyi dengan frekuensi 1000 Hz
-      status = "Emergency";
-      statusled = "Aktif";
-    } else {
-      digitalWrite(LED1, LOW);   // LED Merah mati
-      digitalWrite(LED2, HIGH);  // LED Hijau menyala
-      noTone(BUZZER);            // Buzzer mati
-      status = "Stand%20By";
-      statusled = "Stand%20By";
-    }
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
 
-    // Kirimkan data ke server hanya jika status tombol berubah
-    if (WiFi.status() == WL_CONNECTED) {
-      HTTPClient http;
-      String serverPath = "http://192.168.0.133/UAS_PBM_5/api/create.php?status=" + status + "&status_led=" + statusled;  // Kirim status dan status_led
-      Serial.print("Requesting URL: ");
-      Serial.println(serverPath);
+    // Mengambil status dari server
+    http.begin(statusServer);
+    int httpResponseCode = http.GET();
 
-      http.begin(serverPath);             // Start HTTP
-      int httpResponseCode = http.GET();  // Permintaan GET
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.print("Response dari server: ");
+      Serial.println(response);
 
-      // Debugging: Cek kode respon HTTP
-      if (httpResponseCode > 0) {
-        String response = http.getString();  // Get respon
-        Serial.println(httpResponseCode);    // Kode respon
-        Serial.println(response);            // Respon server
+      if (response == "1") {
+        // Jika status Emergency
+        digitalWrite(LED1, HIGH);  // LED Merah menyala
+        digitalWrite(LED2, LOW);   // LED Hijau mati
+        tone(BUZZER, 1000);        // Buzzer berbunyi dengan frekuensi 1000 Hz
+        status = "Emergency";
+        statusled = "Aktif";
       } else {
-        Serial.print("Error on HTTP request: ");
-        Serial.println(httpResponseCode);
+        // Jika status Stand By
+        digitalWrite(LED1, LOW);   // LED Merah mati
+        digitalWrite(LED2, HIGH);  // LED Hijau menyala
+        noTone(BUZZER);            // Buzzer mati
+        status = "Stand%20By";
+        statusled = "Stand%20By";
       }
-      http.end();  // Close koneksi
+
+      // Cek apakah status telah berubah
+      if (status != lastStatus || statusled != lastStatusLed) {
+        // Kirim status dan status_led ke server hanya jika ada perubahan
+        String serverPath = "http://192.168.0.133/UAS_PBM_5/api/save_data.php?status=" + status + "&status_led=" + statusled;
+        Serial.print("Requesting URL: ");
+        Serial.println(serverPath);
+
+        http.begin(serverPath);  // Mulai HTTP Request
+        int saveDataResponseCode = http.GET(); // Permintaan GET untuk menyimpan data
+
+        // Debugging: Cek kode respon HTTP
+        if (saveDataResponseCode > 0) {
+          String saveDataResponse = http.getString();
+          Serial.println(saveDataResponseCode); // Kode respon
+          Serial.println(saveDataResponse);     // Respon server
+        } else {
+          Serial.print("Error on HTTP request: ");
+          Serial.println(saveDataResponseCode);
+        }
+
+        http.end();  // Menutup koneksi HTTP
+
+        // Update status terakhir yang telah dikirim
+        lastStatus = status;
+        lastStatusLed = statusled;
+      }
     } else {
       Serial.println("WiFi Disconnected");
     }
-
-    // Update status tombol sebelumnya
-    previousButtonState = buttonState;
   }
+
+  delay(1000);  // Delay sebelum melakukan request berikutnya
 }
-
-
